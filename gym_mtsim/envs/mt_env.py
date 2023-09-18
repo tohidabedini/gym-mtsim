@@ -208,7 +208,12 @@ class MtEnv(gym.Env):
 
 
     def _process_data(self) -> np.ndarray:
-        data = self.prices
+        # data = self.prices
+
+        data = {}
+        for symbol in self.trading_symbols:
+            data[symbol] = np.array(self.original_simulator.symbols_data[symbol])
+
         signal_features = np.column_stack(list(data.values()))
         return signal_features
 
