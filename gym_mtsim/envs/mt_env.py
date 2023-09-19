@@ -28,6 +28,7 @@ class MtEnv(gym.Env):
             window_size: int, time_points: Optional[List[datetime]]=None,
             hold_threshold: float=0.5, close_threshold: float=0.5,
             fee: Union[float, Callable[[str], float]]=0.0005,
+            fee_type:str = "fixed",
             symbol_max_orders: int=1, multiprocessing_processes: Optional[int]=None
         ) -> None:
 
@@ -59,6 +60,7 @@ class MtEnv(gym.Env):
         self.hold_threshold = hold_threshold
         self.close_threshold = close_threshold
         self.fee = fee
+        self.fee_type = fee_type
         self.symbol_max_orders = symbol_max_orders
         self.multiprocessing_pool = Pool(multiprocessing_processes) if multiprocessing_processes else None
 
@@ -177,7 +179,7 @@ class MtEnv(gym.Env):
                 fee = self.fee if type(self.fee) is float else self.fee(symbol)
 
                 try:
-                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee)
+                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type)
                     new_info = dict(
                         order_id=order.id, order_type=order_type,
                         fee=fee, margin=order.margin,

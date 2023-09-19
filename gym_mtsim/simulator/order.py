@@ -23,7 +23,8 @@ class Order:
         self,
         id: int, type: OrderType, symbol: str, volume: float, fee: float,
         entry_time: datetime, entry_price: float,
-        exit_time: datetime, exit_price: float
+        exit_time: datetime, exit_price: float,
+        fee_type: str="fixed",
     ) -> None:
 
         self.id = id
@@ -31,6 +32,7 @@ class Order:
         self.symbol = symbol
         self.volume = volume
         self.fee = fee
+        self.fee_type = fee_type
         self.entry_time = entry_time
         self.entry_price = entry_price
         self.exit_time = exit_time

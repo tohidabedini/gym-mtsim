@@ -119,18 +119,18 @@ class MtSimulator:
         return symbol_orders
 
 
-    def create_order(self, order_type: OrderType, symbol: str, volume: float, fee: float=0.0005) -> Order:
+    def create_order(self, order_type: OrderType, symbol: str, volume: float, fee: float=0.0005, fee_type: str="fixed") -> Order:
         self._check_current_time()
         self._check_volume(symbol, volume)
         if fee < 0.:
             raise ValueError(f"negative fee '{fee}'")
 
         if self.hedge:
-            return self._create_hedged_order(order_type, symbol, volume, fee)
-        return self._create_unhedged_order(order_type, symbol, volume, fee)
+            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type)
+        return self._create_unhedged_order(order_type, symbol, volume, fee, fee_type)
 
 
-    def _create_hedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float) -> Order:
+    def _create_hedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str) -> Order:
         order_id = len(self.closed_orders) + len(self.orders) + 1
         entry_time = self.current_time
         entry_price = self.price_at(symbol, entry_time)['Close']
@@ -139,7 +139,7 @@ class MtSimulator:
 
         order = Order(
             order_id, order_type, symbol, volume, fee,
-            entry_time, entry_price, exit_time, exit_price
+            entry_time, entry_price, exit_time, exit_price, fee_type=fee_type,
         )
         self._update_order_profit(order)
         self._update_order_margin(order)
@@ -156,14 +156,14 @@ class MtSimulator:
         return order
 
 
-    def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float) -> Order:
+    def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str) -> Order:
         if symbol not in map(lambda order: order.symbol, self.orders):
-            return self._create_hedged_order(order_type, symbol, volume, fee)
+            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type)
 
         old_order: Order = self.symbol_orders(symbol)[0]
 
         if old_order.type == order_type:
-            new_order = self._create_hedged_order(order_type, symbol, volume, fee)
+            new_order = self._create_hedged_order(order_type, symbol, volume, fee, fee_type)
             self.orders.remove(new_order)
 
             entry_price_weighted_average = np.average(
@@ -182,7 +182,7 @@ class MtSimulator:
         if volume >= old_order.volume:
              self.close_order(old_order)
              if volume > old_order.volume:
-                 return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee)
+                 return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee, fee_type)
              return old_order
 
         partial_profit = (volume / old_order.volume) * old_order.profit
@@ -249,8 +249,20 @@ class MtSimulator:
     def _update_order_profit(self, order: Order) -> None:
         diff = order.exit_price - order.entry_price
         v = order.volume * self.symbols_info[order.symbol].trade_contract_size
-        local_profit = v * (order.type.sign * diff - order.fee)
+
+        if order.fee_type=="fixed":
+            local_profit = v * (order.type.sign * diff - order.fee)
+        elif order.fee_type=="floating":
+            local_profit = v * (order.type.sign * diff)
+            if local_profit > 0:
+                local_profit *= (1 - order.fee)
+            else:
+                local_profit *= (1 + order.fee)
+
         order.profit = local_profit * self._get_unit_ratio(order.symbol, order.exit_time)
+
+        # print(f"fee profit: {local_profit}, no fee profit: {v * (order.type.sign * diff)}")
+        # print(f"local_profit: {local_profit}, first element: {order.type.sign * diff}, fee prod: {(1 - order.fee)}")
 
 
     def _update_order_margin(self, order: Order) -> None:
