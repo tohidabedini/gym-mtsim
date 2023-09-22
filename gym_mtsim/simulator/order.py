@@ -38,5 +38,6 @@ class Order:
         self.exit_time = exit_time
         self.exit_price = exit_price
         self.profit = 0.
+        self.gross_profit= 0.
         self.margin = 0.
         self.closed = False

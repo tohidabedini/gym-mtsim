@@ -173,6 +173,7 @@ class MtSimulator:
 
             old_order.volume += new_order.volume
             old_order.profit += new_order.profit
+            old_order.gross_profit += new_order.gross_profit
             old_order.margin += new_order.margin
             old_order.entry_price = entry_price_weighted_average
             old_order.fee = max(old_order.fee, new_order.fee)
@@ -186,10 +187,12 @@ class MtSimulator:
              return old_order
 
         partial_profit = (volume / old_order.volume) * old_order.profit
+        partial_gross_profit = (volume / old_order.volume) * old_order.gross_profit
         partial_margin = (volume / old_order.volume) * old_order.margin
 
         old_order.volume -= volume
         old_order.profit -= partial_profit
+        old_order.gross_profit -= partial_gross_profit
         old_order.margin -= partial_margin
 
         self.balance += partial_profit
@@ -229,6 +232,7 @@ class MtSimulator:
                 'Exit Time': order.exit_time,
                 'Exit Price': order.exit_price,
                 'Profit': order.profit,
+                'Gross Profit': order.gross_profit,
                 'Margin': order.margin,
                 'Fee': order.fee,
                 'Closed': order.closed,
@@ -249,9 +253,11 @@ class MtSimulator:
     def _update_order_profit(self, order: Order) -> None:
         diff = order.exit_price - order.entry_price
         v = order.volume * self.symbols_info[order.symbol].trade_contract_size
+        local_gross_profit = v * (order.type.sign * diff)
 
         if order.fee_type=="fixed":
             local_profit = v * (order.type.sign * diff - order.fee)
+
         elif order.fee_type=="floating":
             local_profit = v * (order.type.sign * diff)
             if local_profit > 0:
@@ -260,6 +266,7 @@ class MtSimulator:
                 local_profit *= (1 + order.fee)
 
         order.profit = local_profit * self._get_unit_ratio(order.symbol, order.exit_time)
+        order.gross_profit = local_gross_profit * self._get_unit_ratio(order.symbol, order.exit_time)
 
         # print(f"fee profit: {local_profit}, no fee profit: {v * (order.type.sign * diff)}")
         # print(f"local_profit: {local_profit}, first element: {order.type.sign * diff}, fee prod: {(1 - order.fee)}")
