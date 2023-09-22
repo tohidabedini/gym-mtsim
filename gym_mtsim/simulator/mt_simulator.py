@@ -1,7 +1,10 @@
 from typing import List, Tuple, Dict, Any, Optional
 
 import os
-import pickle
+try:
+    import pickle5 as pickle
+except ImportError:
+    import pickle
 from datetime import datetime, timedelta
 
 import numpy as np
