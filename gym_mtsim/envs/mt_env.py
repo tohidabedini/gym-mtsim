@@ -6,6 +6,7 @@ from pathos.multiprocessing import ProcessingPool as Pool
 
 import numpy as np
 from scipy.special import expit
+import pandas as pd
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as plt_cm
@@ -504,3 +505,37 @@ class MtEnv(gym.Env):
 
     def close(self) -> None:
         plt.close()
+
+
+    def orders_extractor_from_history(self, change_index=False, sort=True):
+        state = self.render()
+        orders = state['orders'].copy().iloc[::-1]
+
+        # orders['Profit_'] = ((orders['Entry Price'] - orders['Exit Price']) -orders['Fee']) * orders['Volume']
+        orders['Entry Value'] = ((orders['Entry Price'] * orders['Volume']))
+        orders['Return'] = orders['Profit'] / ((orders['Entry Price'] * orders['Volume']))
+        orders['Duration'] = orders['Exit Time'] - orders['Entry Time']
+
+        if change_index:
+            column = 'Entry Time' if entry else 'Exit Time'
+            orders['Date'] = orders[column]
+            orders.set_index('Date', inplace=True)
+
+        if sort:
+            orders = orders.sort_index()
+
+        return orders
+
+    def returns_equity_extractor_from_history(self):
+        state = self.render()
+
+        equity = pd.Series([h['equity'] for h in self.history], index=self.time_points[self.window_size - 1:])
+        returns = equity.pct_change().iloc[1:]
+
+        return returns, equity
+
+    def returns_equity_close_prices_orders_extractor_from_history(self, symbol, change_index=False, sort=True):
+        returns, equity = self.returns_equity_extractor_from_history()
+        close_prices_list = self.prices[symbol][:, 0]
+        orders = self.orders_extractor_from_history(change_index=change_index, sort=sort)
+        return returns, equity, close_prices_list, orders
