@@ -515,6 +515,7 @@ class MtEnv(gym.Env):
         orders['Entry Value'] = ((orders['Entry Price'] * orders['Volume']))
         orders['Return'] = orders['Profit'] / ((orders['Entry Price'] * orders['Volume']))
         orders['Duration'] = orders['Exit Time'] - orders['Entry Time']
+        orders["Paid Fee"]  = orders["Gross Profit"] - orders["Profit"]
 
         if change_index:
             column = 'Entry Time' if entry else 'Exit Time'
