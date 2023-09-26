@@ -76,70 +76,6 @@ class MtSimulator:
             self.symbols_info, self.symbols_data = pickle.load(file)
         return True
 
-    def order_sl_or_tp_creator(self, order, low_or_high):
-        if order.type == OrderType.Buy:
-            if low_or_high=="Low":
-                sl_or_tp = order.sl
-            elif low_or_high=="High":
-                sl_or_tp = order.tp
-        elif order.type == OrderType.Sell:
-            if low_or_high=="Low":
-                sl_or_tp = order.tp
-            elif low_or_high=="High":
-                sl_or_tp = order.sl
-
-        return sl_or_tp
-
-    def sl_tp_conditions_creator(self, order, low_or_high):
-        sl_or_tp = self.order_sl_or_tp_creator(order, low_or_high)
-
-        if order.sl_tp_type == "pip":
-            if low_or_high=="Low":
-                return order.entry_price - sl_or_tp
-            elif low_or_high=="High":
-                return order.entry_price + sl_or_tp
-        elif order.sl_tp_type == "percent":
-            if low_or_high=="Low":
-                return order.entry_price * (1 - sl_or_tp)
-            elif low_or_high=="High":
-                return order.entry_price * (1 + sl_or_tp)
-
-
-    @staticmethod
-    def check_is_not_none(condition):
-        if condition is not None:
-            return True
-        else:
-            return False
-
-
-    def check_sl_tp_condition(self, order, current_ohlc):
-        close_order = False
-        sl_or_tp_low  = self.order_sl_or_tp_creator(order, low_or_high="Low")
-        sl_or_tp_high = self.order_sl_or_tp_creator(order, low_or_high="High")
-
-
-        if order.type == OrderType.Buy:
-            if self.check_is_not_none(sl_or_tp_low):
-                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # SL
-                    close_order = True
-
-            if self.check_is_not_none(sl_or_tp_high):
-                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # TP
-                    close_order = True
-
-        if order.type == OrderType.Sell:
-            if self.check_is_not_none(sl_or_tp_high):
-                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # SL
-                    close_order = True
-
-            if self.check_is_not_none(sl_or_tp_low):
-                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # TP
-                    close_order = True
-
-        if close_order:
-            self.close_order(order)
-
 
     def tick(self, delta_time: timedelta=timedelta()) -> None:
         self._check_current_time()
@@ -153,9 +89,6 @@ class MtSimulator:
             order.exit_price = current_ohlc['Close']
             self._update_order_profit(order)
             self.equity += order.profit
-
-            if self.check_is_not_none(order.sl_tp_type):
-                self.check_sl_tp_condition(order, current_ohlc)
 
 
         while self.margin_level < self.stop_out_level and len(self.orders) > 0:
@@ -311,7 +244,7 @@ class MtSimulator:
                 'Closed': order.closed,
                 'SL': order.sl,
                 'TP': order.tp,
-                'SL_TP_Type': order.sl_tp_type,
+                'SL/TP Type': order.sl_tp_type,
             })
         orders_df = pd.DataFrame(orders)
 

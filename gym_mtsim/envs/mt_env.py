@@ -160,6 +160,7 @@ class MtEnv(gym.Env):
             )[0]
             orders_to_close = np.array(symbol_orders)[orders_to_close_index]
 
+            # print(orders_to_close)
             # print(f"hold_logit:{hold_logit}, hold_probability:{hold_probability}, close_orders_logit:{close_orders_logit}, close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}")
 
 
@@ -174,7 +175,19 @@ class MtEnv(gym.Env):
                     fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
                 ))
 
-            orders_capacity = self.symbol_max_orders - (len(symbol_orders) - len(orders_to_close))
+            orders = self.simulator.symbol_orders(symbol)
+            for order in orders:
+                if self.check_is_not_none(order.sl_tp_type):
+                    if self.check_sl_tp_condition(order, log=True):
+                        closed_orders_info[symbol].append(dict(
+                            order_id=order.id, symbol=order.symbol, order_type=order.type,
+                            volume=order.volume, fee=order.fee,
+                            margin=order.margin, profit=order.profit,
+                            fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
+                        ))
+
+            orders_capacity = self.symbol_max_orders - (len(self.simulator.symbol_orders(symbol)))
+
             orders_info[symbol] = dict(
                 order_id=None, symbol=symbol, hold_probability=hold_probability,
                 hold=hold, volume=volume, capacity=orders_capacity, order_type=None,
@@ -206,6 +219,83 @@ class MtEnv(gym.Env):
                 # print("---------------------------------------")
                 # print()
         return orders_info, closed_orders_info
+
+
+    def order_sl_or_tp_creator(self, order, low_or_high):
+        if order.type == OrderType.Buy:
+            if low_or_high=="Low":
+                sl_or_tp = order.sl
+            elif low_or_high=="High":
+                sl_or_tp = order.tp
+        elif order.type == OrderType.Sell:
+            if low_or_high=="Low":
+                sl_or_tp = order.tp
+            elif low_or_high=="High":
+                sl_or_tp = order.sl
+
+        return sl_or_tp
+
+    def sl_tp_conditions_creator(self, order, low_or_high):
+        sl_or_tp = self.order_sl_or_tp_creator(order, low_or_high)
+
+        if order.sl_tp_type == "pip":
+            if low_or_high=="Low":
+                return order.entry_price - sl_or_tp
+            elif low_or_high=="High":
+                return order.entry_price + sl_or_tp
+        elif order.sl_tp_type == "percent":
+            if low_or_high=="Low":
+                return order.entry_price * (1 - sl_or_tp)
+            elif low_or_high=="High":
+                return order.entry_price * (1 + sl_or_tp)
+
+    @staticmethod
+    def check_is_not_none(condition):
+        if condition is not None:
+            return True
+        else:
+            return False
+
+
+    def check_sl_tp_condition(self, order, log=False):
+        current_ohlc = self.simulator.price_at(order.symbol, order.exit_time)
+        close_order = False
+        sl_or_tp_low  = self.order_sl_or_tp_creator(order, low_or_high="Low")
+        sl_or_tp_high = self.order_sl_or_tp_creator(order, low_or_high="High")
+
+
+        if order.type == OrderType.Buy:
+            if self.check_is_not_none(sl_or_tp_low):
+                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # SL
+                    if log:
+                        print("Buy SL Hit")
+                    close_order = True
+
+            if self.check_is_not_none(sl_or_tp_high):
+                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # TP
+                    if log:
+                        print("Buy TP Hit")
+                    close_order = True
+
+        if order.type == OrderType.Sell:
+            if self.check_is_not_none(sl_or_tp_high):
+                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # SL
+                    if log:
+                        print("Sell SL Hit")
+                    close_order = True
+
+            if self.check_is_not_none(sl_or_tp_low):
+                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # TP
+                    if log:
+                        print("Sell TP Hit")
+                    close_order = True
+
+        if close_order:
+            self.simulator.close_order(order)
+            return True
+        else:
+            return False
+
 
 
     def _get_prices(self, keys: List[str]=['Close', 'Open']) -> Dict[str, np.ndarray]:
