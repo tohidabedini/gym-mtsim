@@ -30,6 +30,9 @@ class MtEnv(gym.Env):
             hold_threshold: float=0.5, close_threshold: float=0.5,
             fee: Union[float, Callable[[str], float]]=0.0005,
             fee_type:str = "fixed",
+            sl_tp_type:str = None,
+            sl: float=None,
+            tp:float=None,
             symbol_max_orders: int=1, multiprocessing_processes: Optional[int]=None
         ) -> None:
 
@@ -62,6 +65,9 @@ class MtEnv(gym.Env):
         self.close_threshold = close_threshold
         self.fee = fee
         self.fee_type = fee_type
+        self.sl_tp_type = sl_tp_type
+        self.sl = sl
+        self.tp = tp
         self.symbol_max_orders = symbol_max_orders
         self.multiprocessing_pool = Pool(multiprocessing_processes) if multiprocessing_processes else None
 
@@ -154,6 +160,10 @@ class MtEnv(gym.Env):
             )[0]
             orders_to_close = np.array(symbol_orders)[orders_to_close_index]
 
+            # print(f"hold_logit:{hold_logit}, hold_probability:{hold_probability}, close_orders_logit:{close_orders_logit}, close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}")
+
+
+
             for j, order in enumerate(orders_to_close):
                 self.simulator.close_order(order)
                 closed_orders_info[symbol].append(dict(
@@ -161,6 +171,7 @@ class MtEnv(gym.Env):
                     volume=order.volume, fee=order.fee,
                     margin=order.margin, profit=order.profit,
                     close_probability=close_orders_probability[orders_to_close_index][j],
+                    fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
                 ))
 
             orders_capacity = self.symbol_max_orders - (len(symbol_orders) - len(orders_to_close))
@@ -168,6 +179,7 @@ class MtEnv(gym.Env):
                 order_id=None, symbol=symbol, hold_probability=hold_probability,
                 hold=hold, volume=volume, capacity=orders_capacity, order_type=None,
                 modified_volume=modified_volume, fee=float('nan'), margin=float('nan'),
+                fee_type=self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type,
                 error='',
             )
 
@@ -180,7 +192,7 @@ class MtEnv(gym.Env):
                 fee = self.fee if type(self.fee) is float else self.fee(symbol)
 
                 try:
-                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type)
+                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type)
                     new_info = dict(
                         order_id=order.id, order_type=order_type,
                         fee=fee, margin=order.margin,
@@ -190,6 +202,9 @@ class MtEnv(gym.Env):
 
                 orders_info[symbol].update(new_info)
 
+                # print(f"symbol_orders:{symbol_orders} ,hold_probability:{hold_probability, hold}, close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}, volume:{volume}, modified_volume:{modified_volume}, orders_capacity:{orders_capacity}, new_info:{new_info}")
+                # print("---------------------------------------")
+                # print()
         return orders_info, closed_orders_info
 
 

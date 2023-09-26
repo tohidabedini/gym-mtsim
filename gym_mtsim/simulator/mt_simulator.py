@@ -76,6 +76,70 @@ class MtSimulator:
             self.symbols_info, self.symbols_data = pickle.load(file)
         return True
 
+    def order_sl_or_tp_creator(self, order, low_or_high):
+        if order.type == OrderType.Buy:
+            if low_or_high=="Low":
+                sl_or_tp = order.sl
+            elif low_or_high=="High":
+                sl_or_tp = order.tp
+        elif order.type == OrderType.Sell:
+            if low_or_high=="Low":
+                sl_or_tp = order.tp
+            elif low_or_high=="High":
+                sl_or_tp = order.sl
+
+        return sl_or_tp
+
+    def sl_tp_conditions_creator(self, order, low_or_high):
+        sl_or_tp = self.order_sl_or_tp_creator(order, low_or_high)
+
+        if order.sl_tp_type == "pip":
+            if low_or_high=="Low":
+                return order.entry_price - sl_or_tp
+            elif low_or_high=="High":
+                return order.entry_price + sl_or_tp
+        elif order.sl_tp_type == "percent":
+            if low_or_high=="Low":
+                return order.entry_price * (1 - sl_or_tp)
+            elif low_or_high=="High":
+                return order.entry_price * (1 + sl_or_tp)
+
+
+    @staticmethod
+    def check_is_not_none(condition):
+        if condition is not None:
+            return True
+        else:
+            return False
+
+
+    def check_sl_tp_condition(self, order, current_ohlc):
+        close_order = False
+        sl_or_tp_low  = self.order_sl_or_tp_creator(order, low_or_high="Low")
+        sl_or_tp_high = self.order_sl_or_tp_creator(order, low_or_high="High")
+
+
+        if order.type == OrderType.Buy:
+            if self.check_is_not_none(sl_or_tp_low):
+                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # SL
+                    close_order = True
+
+            if self.check_is_not_none(sl_or_tp_high):
+                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # TP
+                    close_order = True
+
+        if order.type == OrderType.Sell:
+            if self.check_is_not_none(sl_or_tp_high):
+                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # SL
+                    close_order = True
+
+            if self.check_is_not_none(sl_or_tp_low):
+                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # TP
+                    close_order = True
+
+        if close_order:
+            self.close_order(order)
+
 
     def tick(self, delta_time: timedelta=timedelta()) -> None:
         self._check_current_time()
@@ -85,9 +149,14 @@ class MtSimulator:
 
         for order in self.orders:
             order.exit_time = self.current_time
-            order.exit_price = self.price_at(order.symbol, order.exit_time)['Close']
+            current_ohlc = self.price_at(order.symbol, order.exit_time)
+            order.exit_price = current_ohlc['Close']
             self._update_order_profit(order)
             self.equity += order.profit
+
+            if self.check_is_not_none(order.sl_tp_type):
+                self.check_sl_tp_condition(order, current_ohlc)
+
 
         while self.margin_level < self.stop_out_level and len(self.orders) > 0:
             most_unprofitable_order = min(self.orders, key=lambda order: order.profit)
@@ -122,18 +191,18 @@ class MtSimulator:
         return symbol_orders
 
 
-    def create_order(self, order_type: OrderType, symbol: str, volume: float, fee: float=0.0005, fee_type: str="fixed") -> Order:
+    def create_order(self, order_type: OrderType, symbol: str, volume: float, fee: float=0.0005, fee_type: str="fixed", sl: float=None, tp:float=None, sl_tp_type: str=None,) -> Order:
         self._check_current_time()
         self._check_volume(symbol, volume)
         if fee < 0.:
             raise ValueError(f"negative fee '{fee}'")
 
         if self.hedge:
-            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type)
-        return self._create_unhedged_order(order_type, symbol, volume, fee, fee_type)
+            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
+        return self._create_unhedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
 
 
-    def _create_hedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str) -> Order:
+    def _create_hedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str) -> Order:
         order_id = len(self.closed_orders) + len(self.orders) + 1
         entry_time = self.current_time
         entry_price = self.price_at(symbol, entry_time)['Close']
@@ -142,7 +211,7 @@ class MtSimulator:
 
         order = Order(
             order_id, order_type, symbol, volume, fee,
-            entry_time, entry_price, exit_time, exit_price, fee_type=fee_type,
+            entry_time, entry_price, exit_time, exit_price, fee_type=fee_type, sl=sl, tp=tp, sl_tp_type=sl_tp_type,
         )
         self._update_order_profit(order)
         self._update_order_margin(order)
@@ -159,14 +228,14 @@ class MtSimulator:
         return order
 
 
-    def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str) -> Order:
+    def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str) -> Order:
         if symbol not in map(lambda order: order.symbol, self.orders):
-            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type)
+            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
 
         old_order: Order = self.symbol_orders(symbol)[0]
 
         if old_order.type == order_type:
-            new_order = self._create_hedged_order(order_type, symbol, volume, fee, fee_type)
+            new_order = self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
             self.orders.remove(new_order)
 
             entry_price_weighted_average = np.average(
@@ -186,7 +255,7 @@ class MtSimulator:
         if volume >= old_order.volume:
              self.close_order(old_order)
              if volume > old_order.volume:
-                 return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee, fee_type)
+                 return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee, fee_type, sl, tp, sl_tp_type)
              return old_order
 
         partial_profit = (volume / old_order.volume) * old_order.profit
@@ -238,7 +307,11 @@ class MtSimulator:
                 'Gross Profit': order.gross_profit,
                 'Margin': order.margin,
                 'Fee': order.fee,
+                'Fee Type': order.fee_type,
                 'Closed': order.closed,
+                'SL': order.sl,
+                'TP': order.tp,
+                'SL_TP_Type': order.sl_tp_type,
             })
         orders_df = pd.DataFrame(orders)
 

@@ -24,8 +24,9 @@ class Order:
         id: int, type: OrderType, symbol: str, volume: float, fee: float,
         entry_time: datetime, entry_price: float,
         exit_time: datetime, exit_price: float,
-        fee_type: str="fixed",
+        fee_type: str="fixed", sl: float=None, tp:float=None, sl_tp_type: str=None,
     ) -> None:
+        # sl_tp_type: "percent", "pip"
 
         self.id = id
         self.type = type
@@ -39,5 +40,8 @@ class Order:
         self.exit_price = exit_price
         self.profit = 0.
         self.gross_profit= 0.
+        self.sl = sl
+        self.tp = tp
+        self.sl_tp_type = sl_tp_type
         self.margin = 0.
         self.closed = False
