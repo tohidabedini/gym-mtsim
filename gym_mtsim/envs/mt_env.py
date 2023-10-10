@@ -13,16 +13,16 @@ import matplotlib.cm as plt_cm
 import matplotlib.colors as plt_colors
 import plotly.graph_objects as go
 
-import gym
-from gym import spaces
-from gym.utils import seeding
+import gymnasium as gym
+from gymnasium import spaces
+from gymnasium.utils import seeding
 
 from ..simulator import MtSimulator, OrderType
 
 
 class MtEnv(gym.Env):
 
-    metadata = {'render.modes': ['human', 'simple_figure', 'advanced_figure']}
+    metadata = {'render_modes': ['human', 'simple_figure', 'advanced_figure']}
 
     def __init__(
             self, original_simulator: MtSimulator, trading_symbols: List[str],
@@ -33,7 +33,8 @@ class MtEnv(gym.Env):
             sl_tp_type:str = None,
             sl: float=None,
             tp:float=None,
-            symbol_max_orders: int=1, multiprocessing_processes: Optional[int]=None
+            symbol_max_orders: int=1, multiprocessing_processes: Optional[int]=None,
+            render_mode=None
         ) -> None:
 
         # validations
@@ -56,7 +57,10 @@ class MtEnv(gym.Env):
         assert len(time_points) > window_size, "not enough time points provided"
 
         # attributes
-        self.seed()
+        # self.seed()
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+
         self.original_simulator = original_simulator
         self.trading_symbols = trading_symbols
         self.window_size = window_size
@@ -102,18 +106,39 @@ class MtEnv(gym.Env):
         self.history: List[Dict[str, Any]] = NotImplemented
 
 
-    def seed(self, seed: Optional[int]=None) -> List[int]:
-        self.np_random, seed = seeding.np_random(seed)
-        return [seed]
+    # def seed(self, seed: Optional[int]=None) -> List[int]:
+    #     self.np_random, seed = seeding.np_random(seed)
+    #     return [seed]
+    def _get_info(self):
+        orders = np.zeros(self.observation_space['orders'].shape)
+        for i, symbol in enumerate(self.trading_symbols):
+            symbol_orders = self.simulator.symbol_orders(symbol)
+            for j, order in enumerate(symbol_orders):
+                orders[i, j] = [order.entry_price, order.volume, order.profit]
+
+        return dict(
+            balance = np.array([self.simulator.balance]),
+            equity = np.array([self.simulator.equity]),
+            margin = np.array([self.simulator.margin]),
+            orders = orders,
+        )
 
 
-    def reset(self) -> Dict[str, np.ndarray]:
+    def reset(self, seed=None) -> Dict[str, np.ndarray]:
+        super().reset(seed=seed)
         self._done = False
         self._current_tick = self._start_tick
         self.simulator = copy.deepcopy(self.original_simulator)
         self.simulator.current_time = self.time_points[self._current_tick]
         self.history = [self._create_info()]
-        return self._get_observation()
+
+        observation = self._get_observation()
+        info = self._get_info()
+
+        if self.render_mode == "human":
+            self.render()
+
+        return observation, info
 
 
     def step(self, action: np.ndarray) -> Tuple[Dict[str, np.ndarray], float, bool, Dict[str, Any]]:
@@ -134,7 +159,10 @@ class MtEnv(gym.Env):
         observation = self._get_observation()
         self.history.append(info)
 
-        return observation, step_reward, self._done, info
+        if self.render_mode == "human":
+            self.render()
+
+        return observation, step_reward, False, self._done, info
 
 
     def _apply_action(self, action: np.ndarray) -> Tuple[Dict, Dict]:
@@ -320,10 +348,10 @@ class MtEnv(gym.Env):
 
         data = {}
         for symbol in self.trading_symbols:
-            data[symbol] = np.array(self.original_simulator.symbols_data[symbol])
+            data[symbol] = np.array(self.original_simulator.symbols_data[symbol].iloc[:, 2:])
 
         signal_features = np.column_stack(list(data.values()))
-        return signal_features
+        return signal_features.astype(np.float32)
 
 
     def _get_observation(self) -> Dict[str, np.ndarray]:
