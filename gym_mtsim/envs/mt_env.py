@@ -36,6 +36,8 @@ class MtEnv(gym.Env):
             symbol_max_orders: int=1, multiprocessing_processes: Optional[int]=None,
             render_mode:str =None,
             observation_mode: int=0,
+            normalize_observation: bool=True,
+            orders_observation_detail_count: int=2,
         ) -> None:
 
         # validations
@@ -74,13 +76,15 @@ class MtEnv(gym.Env):
         self.sl_tp_type = sl_tp_type
         self.sl = sl
         self.tp = tp
+        self.normalize_observation = normalize_observation
         self.symbol_max_orders = symbol_max_orders
         self.multiprocessing_pool = Pool(multiprocessing_processes) if multiprocessing_processes else None
 
         self.prices = self._get_prices()
         self.signal_features = self._process_data()
         self.features_shape = (self.window_size, self.signal_features.shape[1])
-        self.orders_shape = (len(self.trading_symbols), self.symbol_max_orders, 3)
+        self.orders_observation_detail_count=orders_observation_detail_count
+        self.orders_shape = (len(self.trading_symbols), self.symbol_max_orders, self.orders_observation_detail_count)
         self.flattened_balance_equity_margin_orders_shape = (self.window_size, np.prod(self.orders_shape) + 3)
 
         # episode
@@ -119,7 +123,7 @@ class MtEnv(gym.Env):
                 'margin': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
                 'features': spaces.Box(low=-INF, high=INF, shape=self.features_shape, dtype=np.float64),
                 'orders': spaces.Box(low=-INF, high=INF, dtype=np.float64, shape=self.orders_shape)
-                # symbol, order_i -> [entry_price, volume, profit]
+                # symbol, order_i -> [entry_price, volume, profit] or [volume, profit] based on orders_observation_detail_count
             })
         elif self.observation_mode == 1:
             observation_shape = (self.window_size, self.signal_features.shape[1] + self.flattened_balance_equity_margin_orders_shape[1])
@@ -135,10 +139,12 @@ class MtEnv(gym.Env):
             for j, order in enumerate(symbol_orders):
                 orders[i, j] = [order.entry_price, order.volume, order.profit]
 
+        balance, equity, margin = self._get_balance_equity_margin()
+
         return dict(
-            balance = np.array([self.simulator.balance]),
-            equity = np.array([self.simulator.equity]),
-            margin = np.array([self.simulator.margin]),
+            balance = np.array([balance]),
+            equity = np.array([equity]),
+            margin = np.array([margin]),
             orders = orders,
         )
 
@@ -377,17 +383,38 @@ class MtEnv(gym.Env):
         signal_features = np.column_stack(list(data.values()))
         return signal_features.astype(np.float32)
 
+    def _get_order_detail_list(self, order):
+        entry_price = order.entry_price
+        volume = order.volume
+        profit = order.profit
+
+        if self.normalize_observation:
+            if order.entry_price != 0 and order.volume != 0:
+                current_close = self.simulator.price_at(order.symbol, self.simulator.current_time)["Close"]
+
+                profit = profit / (entry_price * volume)
+                if order.type == OrderType.Buy:
+                    entry_price = (current_close / entry_price) - 1
+                elif order.type == OrderType.Sell:
+                    entry_price = (entry_price / current_close) - 1
+
+        if self.orders_observation_detail_count == 3:
+            return [entry_price, volume, profit]
+        elif self.orders_observation_detail_count == 2:
+            return [volume, profit]
+
     def _get_orders(self):
         orders = np.zeros(self.orders_shape)
         for i, symbol in enumerate(self.trading_symbols):
             symbol_orders = self.simulator.symbol_orders(symbol)
             for j, order in enumerate(symbol_orders):
-                orders[i, j] = [order.entry_price, order.volume, order.profit]
+                orders[i, j] = self._get_order_detail_list(order)
         return orders
 
     def _get_orders_balance_equity_margin_one_step_flattened(self):
         orders_flattened = list(self._get_orders().flatten())
-        balance_equity_margin = [self.simulator.balance, self.simulator.equity, self.simulator.margin]
+        balance, equity, margin = self._get_balance_equity_margin()
+        balance_equity_margin = [balance, equity, margin]
         orders_balance_equity_margin_one_step_flattened = np.array(orders_flattened + balance_equity_margin)
         return orders_balance_equity_margin_one_step_flattened
 
@@ -405,15 +432,28 @@ class MtEnv(gym.Env):
         self.orders_balance_equity_margin_array = self.add_row_shift_down(new_row)
 
 
-    def _get_observation(self) -> Dict[str, np.ndarray]:
+    def _get_balance_equity_margin(self):
+        balance = self.simulator.balance
+        equity = self.simulator.equity
+        margin = self.simulator.margin
+        if self.normalize_observation:
+            balance /= self.simulator.initial_balance
+            equity /= self.simulator.initial_balance
+            margin /= self.simulator.initial_balance
+
+        return balance, equity, margin
+
+    def _get_observation(self):
         features = self.signal_features[(self._current_tick-self.window_size+1):(self._current_tick+1)]
 
         if self.observation_mode==0:
+            balance, equity, margin = self._get_balance_equity_margin()
             orders = self._get_orders()
+
             observation = {
-                'balance': np.array([self.simulator.balance]),
-                'equity': np.array([self.simulator.equity]),
-                'margin': np.array([self.simulator.margin]),
+                'balance': np.array([balance]),
+                'equity': np.array([equity]),
+                'margin': np.array([margin]),
                 'features': features,
                 'orders': orders,
             }

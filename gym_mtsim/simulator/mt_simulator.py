@@ -25,6 +25,7 @@ class MtSimulator:
         self.unit = unit
         self.balance = balance
         self.equity = balance
+        self.initial_balance = balance
         self.margin = 0.
         self.leverage = leverage
         self.stop_out_level = stop_out_level
