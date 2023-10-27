@@ -110,6 +110,12 @@ class MtEnv(gym.Env):
     #     self.np_random, seed = seeding.np_random(seed)
     #     return [seed]
 
+    def set_thresholds(self, close_threshold=None, hold_threshold=None):
+        if close_threshold is not None:
+            self.close_threshold = close_threshold
+        if hold_threshold is not None:
+            self.hold_threshold = hold_threshold
+
     def _init_orders_balance_equity_margin_array(self):
         for i in range(self.window_size):
             self.update_orders_balance_equity_margin_array()
@@ -210,6 +216,7 @@ class MtEnv(gym.Env):
             close_orders_probability = expit(close_orders_logit)
             hold_probability = expit(hold_logit)
             hold = bool(hold_probability > self.hold_threshold)
+            # print(self.hold_threshold, self.close_threshold, hold, hold_probability, close_orders_probability)
             modified_volume = self._get_modified_volume(symbol, volume)
 
             symbol_orders = self.simulator.symbol_orders(symbol)
