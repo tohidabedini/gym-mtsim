@@ -38,7 +38,10 @@ class MtEnv(gym.Env):
             observation_mode: int=0,
             normalize_observation: bool=True,
             orders_observation_detail_count: int=2,
-        ) -> None:
+            action_dtype=np.float64,
+            observation_dtype=np.float32,
+
+    ) -> None:
 
         # validations
         assert len(original_simulator.symbols_data) > 0, "no data available"
@@ -62,6 +65,8 @@ class MtEnv(gym.Env):
         # attributes
         # self.seed()
         assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.action_dtype = action_dtype
+        self.observation_dtype = observation_dtype
         self.render_mode = render_mode
         self.observation_mode = observation_mode
 
@@ -97,7 +102,7 @@ class MtEnv(gym.Env):
 
         # spaces
         self.action_space = spaces.Box(
-            low=-1e2, high=1e2, dtype=np.float64,
+            low=-1e2, high=1e2, dtype=self.action_dtype,
             shape=(len(self.trading_symbols) * (self.symbol_max_orders + 2),)
         )  # symbol -> [close_order_i(logit), hold(logit), volume]
         self.observation_space = self._get_observation_space()
@@ -124,16 +129,16 @@ class MtEnv(gym.Env):
         INF = 1e10
         if self.observation_mode == 0:
             observation_space = spaces.Dict({
-                'balance': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
-                'equity': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
-                'margin': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=np.float64),
-                'features': spaces.Box(low=-INF, high=INF, shape=self.features_shape, dtype=np.float64),
-                'orders': spaces.Box(low=-INF, high=INF, dtype=np.float64, shape=self.orders_shape)
+                'balance': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
+                'equity': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
+                'margin': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
+                'features': spaces.Box(low=-INF, high=INF, shape=self.features_shape, dtype=self.observation_dtype),
+                'orders': spaces.Box(low=-INF, high=INF, dtype=self.observation_dtype, shape=self.orders_shape)
                 # symbol, order_i -> [entry_price, volume, profit] or [volume, profit] based on orders_observation_detail_count
             })
         elif self.observation_mode == 1:
             observation_shape = (self.window_size, self.signal_features.shape[1] + self.flattened_balance_equity_margin_orders_shape[1])
-            observation_space = spaces.Box(low=-INF, high=INF, shape=observation_shape, dtype=np.float64)
+            observation_space = spaces.Box(low=-INF, high=INF, shape=observation_shape, dtype=self.observation_dtype)
 
         return observation_space
 
