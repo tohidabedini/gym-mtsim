@@ -142,6 +142,7 @@ class MtSimulator:
         entry_price = self.price_at(symbol, entry_time)['Close']
         exit_time = entry_time
         exit_price = entry_price
+        # print("_create_hedged_order")
 
         order = Order(
             order_id, order_type, symbol, volume, fee,
@@ -156,6 +157,8 @@ class MtSimulator:
                 f"free margin={self.free_margin})"
             )
 
+        # print(f"IN CREATE HEDGED ORDER: entry_price:{entry_price}, volume:{volume}")
+
         self.equity += order.profit
         self.margin += order.margin
         self.orders.append(order)
@@ -164,6 +167,7 @@ class MtSimulator:
 
     def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str) -> Order:
         if symbol not in map(lambda order: order.symbol, self.orders):
+            # print("_create_unhedged_order to _create_hedged_order")
             return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
 
         old_order: Order = self.symbol_orders(symbol)[0]

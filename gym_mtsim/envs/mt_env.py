@@ -40,8 +40,12 @@ class MtEnv(gym.Env):
             orders_observation_detail_count: int=2,
             action_dtype=np.float64,
             observation_dtype=np.float32,
+            action_mode: int=0,
+            discrete_actions_count: int=3, # should be odd number: 1, 3, 5, ...
+            balance_or_free_margin_for_volume_computation = True
 
     ) -> None:
+
 
         # validations
         assert len(original_simulator.symbols_data) > 0, "no data available"
@@ -69,6 +73,11 @@ class MtEnv(gym.Env):
         self.observation_dtype = observation_dtype
         self.render_mode = render_mode
         self.observation_mode = observation_mode
+        self.action_mode = action_mode
+        self.discrete_actions_count = discrete_actions_count
+        self.actions_fuzzy_term = self.fuzzy_terms_generator(discrete_actions_count)
+        self.balance_or_free_margin_for_volume_computation = balance_or_free_margin_for_volume_computation
+
 
         self.original_simulator = original_simulator
         self.trading_symbols = trading_symbols
@@ -90,7 +99,7 @@ class MtEnv(gym.Env):
         self.features_shape = (self.window_size, self.signal_features.shape[1])
         self.orders_observation_detail_count=orders_observation_detail_count
         self.orders_shape = (len(self.trading_symbols), self.symbol_max_orders, self.orders_observation_detail_count)
-        self.flattened_balance_equity_margin_orders_shape = (self.window_size, np.prod(self.orders_shape) + 3)
+        self.flattened_balance_equity_margin_orders_shape = (self.window_size, np.prod(self.orders_shape) + 4)
 
         # episode
         self._start_tick = self.window_size - 1
@@ -101,10 +110,7 @@ class MtEnv(gym.Env):
         self.history: List[Dict[str, Any]] = NotImplemented
 
         # spaces
-        self.action_space = spaces.Box(
-            low=-1e2, high=1e2, dtype=self.action_dtype,
-            shape=(len(self.trading_symbols) * (self.symbol_max_orders + 2),)
-        )  # symbol -> [close_order_i(logit), hold(logit), volume]
+        self.action_space = self._get_action_space()
         self.observation_space = self._get_observation_space()
         self.orders_balance_equity_margin_array = np.zeros(self.flattened_balance_equity_margin_orders_shape)
 
@@ -114,6 +120,41 @@ class MtEnv(gym.Env):
     # def seed(self, seed: Optional[int]=None) -> List[int]:
     #     self.np_random, seed = seeding.np_random(seed)
     #     return [seed]
+
+    @staticmethod
+    def fuzzy_terms_generator(x):
+        if x % 2 == 0:
+            raise ValueError("Input must be an odd integer.")
+
+        if x == 1:
+            return [0]
+
+        step = 2 / (x - 1)
+        return [i * step - 1 for i in range(x)]
+
+    def _update_price_with_fee(self, net_price, symbol):
+        fee = self.fee if type(self.fee) is float else self.fee(symbol)
+        if self.fee_type=="fixed":
+            net_price += fee
+        elif self.fee_type=="floating":
+            net_price *= (1 + fee)
+        return net_price
+
+    def _get_volume_for_discrete_action(self, symbol, action_fuzzy_value):
+        entry_time = self.simulator.current_time
+        entry_price = self.simulator.price_at(symbol, entry_time)['Close']
+        free_margin = self.simulator.free_margin
+        balance = self.simulator.balance
+        if self.balance_or_free_margin_for_volume_computation:
+            which_to_choose = balance
+        else:
+            which_to_choose = free_margin
+
+        entry_price_with_fee = self._update_price_with_fee(entry_price, symbol)
+        volume = (action_fuzzy_value * which_to_choose) / entry_price_with_fee
+        # print(f"free_margin: {self.simulator.free_margin}, margin: {self.simulator.margin}, equity: {self.simulator.equity}, balance: {self.simulator.balance}, price: {entry_price}, entry_price_with_fee: {entry_price_with_fee}")
+        return volume
+
 
     def set_thresholds(self, close_threshold=None, hold_threshold=None):
         if close_threshold is not None:
@@ -125,6 +166,20 @@ class MtEnv(gym.Env):
         for i in range(self.window_size):
             self.update_orders_balance_equity_margin_array()
 
+    def _get_action_space(self):
+        INF = 1e10
+        if self.action_mode == 0:
+            action_space = spaces.Box(
+                low=-1e2, high=1e2, dtype=self.action_dtype,
+                shape=(len(self.trading_symbols) * (self.symbol_max_orders + 2),)
+            )  # symbol -> [close_order_i(logit), hold(logit), volume]
+
+        elif self.action_mode == 1:
+            # discrete mode only available for one trading_symbols and hedge=False now!
+            action_space = spaces.Discrete(len(self.trading_symbols) * self.discrete_actions_count)
+
+        return action_space
+
     def _get_observation_space(self):
         INF = 1e10
         if self.observation_mode == 0:
@@ -132,6 +187,7 @@ class MtEnv(gym.Env):
                 'balance': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
                 'equity': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
                 'margin': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
+                'free_margin': spaces.Box(low=-INF, high=INF, shape=(1,), dtype=self.observation_dtype),
                 'features': spaces.Box(low=-INF, high=INF, shape=self.features_shape, dtype=self.observation_dtype),
                 'orders': spaces.Box(low=-INF, high=INF, dtype=self.observation_dtype, shape=self.orders_shape)
                 # symbol, order_i -> [entry_price, volume, profit] or [volume, profit] based on orders_observation_detail_count
@@ -150,12 +206,13 @@ class MtEnv(gym.Env):
             for j, order in enumerate(symbol_orders):
                 orders[i, j] = [order.entry_price, order.volume, order.profit]
 
-        balance, equity, margin = self._get_balance_equity_margin()
+        balance, equity, margin, free_margin = self._get_balance_equity_margin()
 
         return dict(
             balance = np.array([balance]),
             equity = np.array([equity]),
             margin = np.array([margin]),
+            free_margin = np.array([free_margin]),
             orders = orders,
         )
 
@@ -213,25 +270,40 @@ class MtEnv(gym.Env):
         k = self.symbol_max_orders + 2
 
         for i, symbol in enumerate(self.trading_symbols):
-            symbol_action = action[k*i:k*(i+1)]
-            close_orders_logit = symbol_action[:-2]
-            hold_logit = symbol_action[-2]
-            volume = symbol_action[-1]
+            if self.action_mode == 0:
+                symbol_action = action[k*i:k*(i+1)]
+                close_orders_logit = symbol_action[:-2]
+                hold_logit = symbol_action[-2]
+                volume = symbol_action[-1]
 
-            close_orders_probability = expit(close_orders_logit)
-            hold_probability = expit(hold_logit)
-            hold = bool(hold_probability > self.hold_threshold)
-            # print(self.hold_threshold, self.close_threshold, hold, hold_probability, close_orders_probability)
+                close_orders_probability = expit(close_orders_logit)
+                hold_probability = expit(hold_logit)
+                hold = bool(hold_probability > self.hold_threshold)
+                # print(self.hold_threshold, self.close_threshold, hold, hold_probability, close_orders_probability)
+
+            elif self.action_mode == 1:
+                # this is just for keeping code able to handle multiple assets in the future
+                action = [action]
+                symbol_action = action[i]
+                action_fuzzy_value = self.actions_fuzzy_term[symbol_action]
+                hold = True if action_fuzzy_value == 0 else False
+                hold_probability = 100.0 if hold else 0.0
+                close_orders_probability = np.array([])
+                volume = self._get_volume_for_discrete_action(symbol, action_fuzzy_value)
+                # print(action, action_fuzzy_value, volume)
+
             modified_volume = self._get_modified_volume(symbol, volume)
-
             symbol_orders = self.simulator.symbol_orders(symbol)
             orders_to_close_index = np.where(
                 close_orders_probability[:len(symbol_orders)] > self.close_threshold
             )[0]
             orders_to_close = np.array(symbol_orders)[orders_to_close_index]
 
+            # print(f"HOLD: {hold}")
+
             # print(orders_to_close)
             # print(f"hold_logit:{hold_logit}, hold_probability:{hold_probability}, close_orders_logit:{close_orders_logit}, close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}")
+            # print(f"close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}, volume:{volume}, modified_volume:{modified_volume}")
 
 
 
@@ -244,6 +316,7 @@ class MtEnv(gym.Env):
                     close_probability=close_orders_probability[orders_to_close_index][j],
                     fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
                 ))
+                # print(f"equity: {self.simulator.equity}, margin:{self.simulator.margin}, balance:{self.simulator.balance}")
 
             orders = self.simulator.symbol_orders(symbol)
             for order in orders:
@@ -257,6 +330,7 @@ class MtEnv(gym.Env):
                         ))
 
             orders_capacity = self.symbol_max_orders - (len(self.simulator.symbol_orders(symbol)))
+            # print(f"orders_capacity: {orders_capacity}")
 
             orders_info[symbol] = dict(
                 order_id=None, symbol=symbol, hold_probability=hold_probability,
@@ -273,6 +347,8 @@ class MtEnv(gym.Env):
             elif not hold:
                 order_type = OrderType.Buy if volume > 0. else OrderType.Sell
                 fee = self.fee if type(self.fee) is float else self.fee(symbol)
+                # print("IN HOLD")
+                # print(f"equity: {self.simulator.equity}, margin:{self.simulator.margin}, balance:{self.simulator.balance}")
 
                 try:
                     order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type)
@@ -283,10 +359,13 @@ class MtEnv(gym.Env):
                 except ValueError as e:
                     new_info = dict(error=str(e))
 
+                # print(f"equity: {self.simulator.equity}, margin:{self.simulator.margin}, balance:{self.simulator.balance}")
+                # print("HOLD DONE")
+
                 orders_info[symbol].update(new_info)
 
-                # print(f"symbol_orders:{symbol_orders} ,hold_probability:{hold_probability, hold}, close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}, volume:{volume}, modified_volume:{modified_volume}, orders_capacity:{orders_capacity}, new_info:{new_info}")
-                # print("---------------------------------------")
+                # print(f"symbol_orders:{self.simulator.symbol_orders(symbol)} ,hold:{hold}, new_info:{new_info}")
+            # print("---------------------------------------")
                 # print()
         return orders_info, closed_orders_info
 
@@ -425,8 +504,8 @@ class MtEnv(gym.Env):
 
     def _get_orders_balance_equity_margin_one_step_flattened(self):
         orders_flattened = list(self._get_orders().flatten())
-        balance, equity, margin = self._get_balance_equity_margin()
-        balance_equity_margin = [balance, equity, margin]
+        balance, equity, margin, free_margin = self._get_balance_equity_margin()
+        balance_equity_margin = [balance, equity, margin, free_margin]
         orders_balance_equity_margin_one_step_flattened = np.array(orders_flattened + balance_equity_margin)
         return orders_balance_equity_margin_one_step_flattened
 
@@ -448,24 +527,27 @@ class MtEnv(gym.Env):
         balance = self.simulator.balance
         equity = self.simulator.equity
         margin = self.simulator.margin
+        free_margin = self.simulator.free_margin
         if self.normalize_observation:
             balance /= self.simulator.initial_balance
             equity /= self.simulator.initial_balance
             margin /= self.simulator.initial_balance
+            free_margin /= self.simulator.initial_balance
 
-        return balance, equity, margin
+        return balance, equity, margin, free_margin
 
     def _get_observation(self):
         features = self.signal_features[(self._current_tick-self.window_size+1):(self._current_tick+1)]
 
         if self.observation_mode==0:
-            balance, equity, margin = self._get_balance_equity_margin()
+            balance, equity, margin, free_margin = self._get_balance_equity_margin()
             orders = self._get_orders()
 
             observation = {
                 'balance': np.array([balance]),
                 'equity': np.array([equity]),
                 'margin': np.array([margin]),
+                'free_margin': np.array([free_margin]),
                 'features': features,
                 'orders': orders,
             }
