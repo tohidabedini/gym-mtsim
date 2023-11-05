@@ -42,7 +42,9 @@ class MtEnv(gym.Env):
             observation_dtype=np.float32,
             action_mode: int=0,
             discrete_actions_count: int=3, # should be odd number: 1, 3, 5, ...
-            balance_or_free_margin_for_volume_computation = True
+            balance_or_free_margin_for_volume_computation:bool=True,
+            ohlc_count_in_symbols_data: int=4
+
 
     ) -> None:
 
@@ -69,6 +71,7 @@ class MtEnv(gym.Env):
         # attributes
         # self.seed()
         assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.ohlc_count_in_symbols_data = ohlc_count_in_symbols_data
         self.action_dtype = action_dtype
         self.observation_dtype = observation_dtype
         self.render_mode = render_mode
@@ -469,7 +472,7 @@ class MtEnv(gym.Env):
 
         data = {}
         for symbol in self.trading_symbols:
-            data[symbol] = np.array(self.original_simulator.symbols_data[symbol].iloc[:, 2:])
+            data[symbol] = np.array(self.original_simulator.symbols_data[symbol].iloc[:, self.ohlc_count_in_symbols_data:])
 
         signal_features = np.column_stack(list(data.values()))
         return signal_features.astype(np.float32)
