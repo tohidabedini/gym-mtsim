@@ -43,8 +43,8 @@ class MtEnv(gym.Env):
             action_mode: int=0,
             discrete_actions_count: int=3, # should be odd number: 1, 3, 5, ...
             balance_or_free_margin_for_volume_computation:bool=True,
-            ohlc_count_in_symbols_data: int=4
-
+            ohlc_count_in_symbols_data: int=4,
+            sl_tp_log:bool=False,
 
     ) -> None:
 
@@ -72,6 +72,7 @@ class MtEnv(gym.Env):
         # self.seed()
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.ohlc_count_in_symbols_data = ohlc_count_in_symbols_data
+        self.sl_tp_log = sl_tp_log
         self.action_dtype = action_dtype
         self.observation_dtype = observation_dtype
         self.render_mode = render_mode
@@ -158,12 +159,18 @@ class MtEnv(gym.Env):
         # print(f"free_margin: {self.simulator.free_margin}, margin: {self.simulator.margin}, equity: {self.simulator.equity}, balance: {self.simulator.balance}, price: {entry_price}, entry_price_with_fee: {entry_price_with_fee}")
         return volume
 
-
     def set_thresholds(self, close_threshold=None, hold_threshold=None):
         if close_threshold is not None:
             self.close_threshold = close_threshold
         if hold_threshold is not None:
             self.hold_threshold = hold_threshold
+
+    def set_sl_tp_and_types(self, sl=None, tp=None, sl_tp_type=None, sl_tp_log=False):
+        self.sl = sl
+        self.tp = tp
+        self.sl_tp_type = sl_tp_type
+        self.sl_tp_log = sl_tp_log
+
 
     def _init_orders_balance_equity_margin_array(self):
         for i in range(self.window_size):
@@ -324,7 +331,7 @@ class MtEnv(gym.Env):
             orders = self.simulator.symbol_orders(symbol)
             for order in orders:
                 if self.check_is_not_none(order.sl_tp_type):
-                    if self.check_sl_tp_condition(order, log=True):
+                    if self.check_sl_tp_condition(order, log=self.sl_tp_log):
                         closed_orders_info[symbol].append(dict(
                             order_id=order.id, symbol=order.symbol, order_type=order.type,
                             volume=order.volume, fee=order.fee,
