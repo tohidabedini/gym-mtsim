@@ -211,13 +211,16 @@ class MtSimulator:
         return old_order
 
 
-    def close_order(self, order: Order) -> float:
+    def close_order(self, order: Order, close_price=None) -> float:
         self._check_current_time()
         if order not in self.orders:
             raise OrderNotFound("order not found in the order list")
 
         order.exit_time = self.current_time
-        order.exit_price = self.price_at(order.symbol, order.exit_time)['Close']
+        if close_price is None:
+            order.exit_price = self.price_at(order.symbol, order.exit_time)['Close']
+        else:
+            order.exit_price = close_price
         self._update_order_profit(order)
 
         self.balance += order.profit
