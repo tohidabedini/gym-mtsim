@@ -25,6 +25,7 @@ class Order:
         entry_time: datetime, entry_price: float,
         exit_time: datetime, exit_price: float,
         fee_type: str="fixed", sl: float=None, tp:float=None, sl_tp_type: str=None,
+        trailing_distance: str=None,
     ) -> None:
         # sl_tp_type: "percent", "pip"
 
@@ -45,3 +46,5 @@ class Order:
         self.sl_tp_type = sl_tp_type
         self.margin = 0.
         self.closed = False
+        self.initial_sl = sl
+        self.trailing_distance = trailing_distance

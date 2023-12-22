@@ -44,6 +44,7 @@ class MtEnv(gym.Env):
             balance_or_free_margin_for_volume_computation: bool = True,
             ohlc_count_in_symbols_data: int = 4,
             sl_tp_log: bool = False,
+            trailing_distance: int = None,
 
     ) -> None:
 
@@ -69,6 +70,7 @@ class MtEnv(gym.Env):
         # attributes
         # self.seed()
         assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.trailing_distance = trailing_distance
         self.ohlc_count_in_symbols_data = ohlc_count_in_symbols_data
         self.sl_tp_log = sl_tp_log
         self.action_dtype = action_dtype
@@ -159,11 +161,12 @@ class MtEnv(gym.Env):
         if hold_threshold is not None:
             self.hold_threshold = hold_threshold
 
-    def set_sl_tp_and_types(self, sl=None, tp=None, sl_tp_type=None, sl_tp_log=False):
+    def set_sl_tp_and_types(self, sl=None, tp=None, sl_tp_type=None, sl_tp_log=False, trailing_distance=None):
         self.sl = sl
         self.tp = tp
         self.sl_tp_type = sl_tp_type
         self.sl_tp_log = sl_tp_log
+        self.trailing_distance = trailing_distance
 
     def _init_orders_balance_equity_margin_array(self):
         for i in range(self.window_size):
@@ -251,6 +254,8 @@ class MtEnv(gym.Env):
     def step(self, action: np.ndarray) -> Tuple[Dict[str, np.ndarray], float, bool, Dict[str, Any]]:
         orders_info, closed_orders_info = self._apply_action(action)
 
+        self.orders_sl_update()
+
         self._current_tick += 1
         if self._current_tick == self._end_tick:
             self._done = True
@@ -275,6 +280,28 @@ class MtEnv(gym.Env):
         # print(f"step_reward: {step_reward}")
 
         return observation, step_reward, self._done, False, info
+
+    def order_trailing_sl_updater(self, order):
+        current_close = self.simulator.price_at(order.symbol, self.simulator.current_time)["Close"]
+
+        if order.type == OrderType.Buy:
+            if order.sl_tp_type == "pip":
+                order.sl = min(order.sl, order.initial_sl + order.entry_price - current_close)
+            elif order.sl_tp_type == "percent":
+                order.sl = min(order.sl, 1 - ((current_close * (1 - order.sl)) / order.entry_price))
+
+        elif order.type == OrderType.Sell:
+            if order.sl_tp_type == "pip":
+                order.sl = min(order.sl, order.initial_sl - order.entry_price + current_close)
+            elif order.sl_tp_type == "percent":
+                order.sl = min(order.sl, ((current_close * (1 + order.sl)) / order.entry_price) - 1)
+
+    def orders_sl_update(self):
+        if self.trailing_distance is not None:
+            for i, symbol in enumerate(self.trading_symbols):
+                orders = self.simulator.symbol_orders(symbol)
+                for order in orders:
+                    self.order_trailing_sl_updater(order)
 
     def _apply_action(self, action: np.ndarray) -> Tuple[Dict, Dict]:
         orders_info = {}
@@ -326,6 +353,7 @@ class MtEnv(gym.Env):
                     margin=order.margin, profit=order.profit,
                     close_probability=close_orders_probability[orders_to_close_index][j],
                     fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
+                    trailing_distance=order.trailing_distance,
                 ))
                 # print(f"equity: {self.simulator.equity}, margin:{self.simulator.margin}, balance:{self.simulator.balance}")
 
@@ -338,6 +366,7 @@ class MtEnv(gym.Env):
                             volume=order.volume, fee=order.fee,
                             margin=order.margin, profit=order.profit,
                             fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
+                            trailing_distance=order.trailing_distance,
                         ))
 
             orders_capacity = self.symbol_max_orders - (len(self.simulator.symbol_orders(symbol)))
@@ -348,6 +377,7 @@ class MtEnv(gym.Env):
                 hold=hold, volume=volume, capacity=orders_capacity, order_type=None,
                 modified_volume=modified_volume, fee=float('nan'), margin=float('nan'),
                 fee_type=self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type,
+                trailing_distance=self.trailing_distance,
                 error='',
             )
 
@@ -363,7 +393,8 @@ class MtEnv(gym.Env):
 
                 try:
                     order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type,
-                                                        sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type)
+                                                        sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type,
+                                                        trailing_distance=self.trailing_distance)
                     new_info = dict(
                         order_id=order.id, order_type=order_type,
                         fee=fee, margin=order.margin,
@@ -400,14 +431,14 @@ class MtEnv(gym.Env):
 
         if order.sl_tp_type == "pip":
             if low_or_high == "Low":
-                return order.entry_price - sl_or_tp
+                return order.entry_price - sl_or_tp, sl_or_tp
             elif low_or_high == "High":
-                return order.entry_price + sl_or_tp
+                return order.entry_price + sl_or_tp, sl_or_tp
         elif order.sl_tp_type == "percent":
             if low_or_high == "Low":
-                return order.entry_price * (1 - sl_or_tp)
+                return order.entry_price * (1 - sl_or_tp), sl_or_tp
             elif low_or_high == "High":
-                return order.entry_price * (1 + sl_or_tp)
+                return order.entry_price * (1 + sl_or_tp), sl_or_tp
 
     @staticmethod
     def check_is_not_none(condition):
@@ -417,40 +448,48 @@ class MtEnv(gym.Env):
             return False
 
     def check_sl_tp_condition(self, order, log=False):
-        current_ohlc = self.simulator.price_at(order.symbol, order.exit_time)
+        current_ohlc = self.simulator.price_at(order.symbol, self.simulator.current_time)
         close_order = False
         sl_or_tp_low = self.order_sl_or_tp_creator(order, low_or_high="Low")
         sl_or_tp_high = self.order_sl_or_tp_creator(order, low_or_high="High")
 
         if order.type == OrderType.Buy:
             if self.check_is_not_none(sl_or_tp_low):
-                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # SL
+                thresh, sl = self.sl_tp_conditions_creator(order, "Low")
+                if current_ohlc["Low"] <= thresh:
                     if log:
-                        print("Buy SL Hit")
+                        print(
+                            f"Buy SL Hit, SL: {sl}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, Low: {current_ohlc['Low']}")
                     close_order = True
-                    close_price = self.sl_tp_conditions_creator(order, "Low")
+                    close_price = thresh
 
             if self.check_is_not_none(sl_or_tp_high):
-                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # TP
+                thresh, tp = self.sl_tp_conditions_creator(order, "High")
+                if current_ohlc["High"] >= thresh:
                     if log:
-                        print("Buy TP Hit")
+                        print(
+                            f"Buy TP Hit, TP: {tp}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, High: {current_ohlc['High']}")
                     close_order = True
-                    close_price = self.sl_tp_conditions_creator(order, "High")
+                    close_price = thresh
 
         if order.type == OrderType.Sell:
             if self.check_is_not_none(sl_or_tp_high):
-                if current_ohlc["High"] >= self.sl_tp_conditions_creator(order, "High"):  # SL
+                thresh, sl = self.sl_tp_conditions_creator(order, "High")
+                if current_ohlc["High"] >= thresh:
                     if log:
-                        print("Sell SL Hit")
+                        print(
+                            f"Sell SL Hit, SL: {sl}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, High: {current_ohlc['High']}")
                     close_order = True
-                    close_price = self.sl_tp_conditions_creator(order, "High")
+                    close_price = thresh
 
             if self.check_is_not_none(sl_or_tp_low):
-                if current_ohlc["Low"] <= self.sl_tp_conditions_creator(order, "Low"):  # TP
+                thresh, tp = self.sl_tp_conditions_creator(order, "Low")
+                if current_ohlc["Low"] <= thresh:
                     if log:
-                        print("Sell TP Hit")
+                        print(
+                            f"Sell TP Hit, TP: {tp}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, Low: {current_ohlc['Low']}")
                     close_order = True
-                    close_price = self.sl_tp_conditions_creator(order, "Low")
+                    close_price = thresh
 
         if close_order:
             self.simulator.close_order(order, close_price=close_price)

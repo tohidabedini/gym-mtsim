@@ -125,18 +125,18 @@ class MtSimulator:
         return symbol_orders
 
 
-    def create_order(self, order_type: OrderType, symbol: str, volume: float, fee: float=0.0005, fee_type: str="fixed", sl: float=None, tp:float=None, sl_tp_type: str=None,) -> Order:
+    def create_order(self, order_type: OrderType, symbol: str, volume: float, fee: float=0.0005, fee_type: str="fixed", sl: float=None, tp:float=None, sl_tp_type: str=None, trailing_distance: str=None, ) -> Order:
         self._check_current_time()
         self._check_volume(symbol, volume)
         if fee < 0.:
             raise ValueError(f"negative fee '{fee}'")
 
         if self.hedge:
-            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
-        return self._create_unhedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
+            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type, trailing_distance)
+        return self._create_unhedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type, trailing_distance)
 
 
-    def _create_hedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str) -> Order:
+    def _create_hedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str, trailing_distance: str) -> Order:
         order_id = len(self.closed_orders) + len(self.orders) + 1
         entry_time = self.current_time
         entry_price = self.price_at(symbol, entry_time)['Close']
@@ -146,7 +146,7 @@ class MtSimulator:
 
         order = Order(
             order_id, order_type, symbol, volume, fee,
-            entry_time, entry_price, exit_time, exit_price, fee_type=fee_type, sl=sl, tp=tp, sl_tp_type=sl_tp_type,
+            entry_time, entry_price, exit_time, exit_price, fee_type=fee_type, sl=sl, tp=tp, sl_tp_type=sl_tp_type, trailing_distance=trailing_distance,
         )
         self._update_order_profit(order)
         self._update_order_margin(order)
@@ -165,15 +165,15 @@ class MtSimulator:
         return order
 
 
-    def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str) -> Order:
+    def _create_unhedged_order(self, order_type: OrderType, symbol: str, volume: float, fee: float, fee_type: str, sl: float, tp:float, sl_tp_type: str, trailing_distance: str,) -> Order:
         if symbol not in map(lambda order: order.symbol, self.orders):
             # print("_create_unhedged_order to _create_hedged_order")
-            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
+            return self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type, trailing_distance)
 
         old_order: Order = self.symbol_orders(symbol)[0]
 
         if old_order.type == order_type:
-            new_order = self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type)
+            new_order = self._create_hedged_order(order_type, symbol, volume, fee, fee_type, sl, tp, sl_tp_type, trailing_distance)
             self.orders.remove(new_order)
 
             entry_price_weighted_average = np.average(
@@ -193,7 +193,7 @@ class MtSimulator:
         if volume >= old_order.volume:
              self.close_order(old_order)
              if volume > old_order.volume:
-                 return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee, fee_type, sl, tp, sl_tp_type)
+                 return self._create_hedged_order(order_type, symbol, volume - old_order.volume, fee, fee_type, sl, tp, sl_tp_type, trailing_distance)
              return old_order
 
         partial_profit = (volume / old_order.volume) * old_order.profit
@@ -253,6 +253,8 @@ class MtSimulator:
                 'SL': order.sl,
                 'TP': order.tp,
                 'SL/TP Type': order.sl_tp_type,
+                'Trailing Distance': order.trailing_distance,
+
             })
         orders_df = pd.DataFrame(orders)
 
