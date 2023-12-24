@@ -21,32 +21,34 @@ from ..simulator import MtSimulator, OrderType
 
 
 class MtEnv(gym.Env):
+
     metadata = {'render_modes': ['human', 'simple_figure', 'advanced_figure']}
 
     def __init__(
             self, original_simulator: MtSimulator, trading_symbols: List[str],
-            window_size: int, time_points: Optional[List[datetime]] = None,
-            hold_threshold: float = 0.5, close_threshold: float = 0.5,
-            fee: Union[float, Callable[[str], float]] = 0.0005,
-            fee_type: str = "fixed",
-            sl_tp_type: str = None,
-            sl: float = None,
-            tp: float = None,
-            symbol_max_orders: int = 1, multiprocessing_processes: Optional[int] = None,
-            render_mode: str = None,
-            observation_mode: int = 0,
-            normalize_observation: bool = True,
-            orders_observation_detail_count: int = 2,
+            window_size: int, time_points: Optional[List[datetime]]=None,
+            hold_threshold: float=0.5, close_threshold: float=0.5,
+            fee: Union[float, Callable[[str], float]]=0.0005,
+            fee_type:str = "fixed",
+            sl_tp_type:str = None,
+            sl: float=None,
+            tp:float=None,
+            symbol_max_orders: int=1, multiprocessing_processes: Optional[int]=None,
+            render_mode:str =None,
+            observation_mode: int=0,
+            normalize_observation: bool=True,
+            orders_observation_detail_count: int=2,
             action_dtype=np.float64,
             observation_dtype=np.float32,
-            action_mode: int = 0,
-            discrete_actions_count: int = 3,  # should be odd number: 1, 3, 5, ...
-            balance_or_free_margin_for_volume_computation: bool = True,
-            ohlc_count_in_symbols_data: int = 4,
-            sl_tp_log: bool = False,
-            trailing_distance: int = None,
+            action_mode: int=0,
+            discrete_actions_count: int=3, # should be odd number: 1, 3, 5, ...
+            balance_or_free_margin_for_volume_computation:bool=True,
+            ohlc_count_in_symbols_data: int=4,
+            sl_tp_log:bool=False,
+            trailing_distance:int=None,
 
     ) -> None:
+
 
         # validations
         assert len(original_simulator.symbols_data) > 0, "no data available"
@@ -61,7 +63,7 @@ class MtEnv(gym.Env):
             assert symbol in original_simulator.symbols_info, f"symbol '{symbol}' not found"
             currency_profit = original_simulator.symbols_info[symbol].currency_profit
             assert original_simulator._get_unit_symbol_info(currency_profit) is not None, \
-                f"unit symbol for '{currency_profit}' not found"
+                   f"unit symbol for '{currency_profit}' not found"
 
         if time_points is None:
             time_points = original_simulator.symbols_data[trading_symbols[0]].index.to_pydatetime().tolist()
@@ -82,6 +84,7 @@ class MtEnv(gym.Env):
         self.actions_fuzzy_term = self.fuzzy_terms_generator(discrete_actions_count)
         self.balance_or_free_margin_for_volume_computation = balance_or_free_margin_for_volume_computation
 
+
         self.original_simulator = original_simulator
         self.trading_symbols = trading_symbols
         self.window_size = window_size
@@ -100,7 +103,7 @@ class MtEnv(gym.Env):
         self.prices = self._get_prices()
         self.signal_features = self._process_data()
         self.features_shape = (self.window_size, self.signal_features.shape[1])
-        self.orders_observation_detail_count = orders_observation_detail_count
+        self.orders_observation_detail_count=orders_observation_detail_count
         self.orders_shape = (len(self.trading_symbols), self.symbol_max_orders, self.orders_observation_detail_count)
         self.flattened_balance_equity_margin_orders_shape = (self.window_size, np.prod(self.orders_shape) + 4)
 
@@ -134,9 +137,9 @@ class MtEnv(gym.Env):
 
     def _update_price_with_fee(self, net_price, symbol):
         fee = self.fee if type(self.fee) is float else self.fee(symbol)
-        if self.fee_type == "fixed":
+        if self.fee_type=="fixed":
             net_price += fee
-        elif self.fee_type == "floating":
+        elif self.fee_type=="floating":
             net_price *= (1 + fee)
         return net_price
 
@@ -168,21 +171,12 @@ class MtEnv(gym.Env):
         self.sl_tp_log = sl_tp_log
         self.trailing_distance = trailing_distance
 
+
     def _init_orders_balance_equity_margin_array(self):
         for i in range(self.window_size):
             self.update_orders_balance_equity_margin_array()
 
     def _get_action_space(self):
-        # action_space = spaces.Tuple((
-        #     spaces.Discrete(len(self.trading_symbols)),
-        #     spaces.Discrete(len(self.trading_symbols)),
-        #     spaces.Box(
-        #         low=-1e2, high=1e2, dtype=self.action_dtype,
-        #         shape=(len(self.trading_symbols) * (self.symbol_max_orders),)
-        #     ),
-        #
-        # )
-        # )
 
         INF = 1e10
         if self.action_mode == 0:
@@ -194,6 +188,24 @@ class MtEnv(gym.Env):
         elif self.action_mode == 1:
             # discrete mode only available for one trading_symbols and hedge=False now!
             action_space = spaces.Discrete(len(self.trading_symbols) * self.discrete_actions_count)
+        elif self.action_mode == 2:
+            single_symbol_action_space = spaces.Tuple((
+                spaces.MultiBinary(self.symbol_max_orders),
+                # spaces.Discrete(2),
+                spaces.Discrete(2),
+                spaces.Box(low=-1e2, high=1e2, shape=(1,), dtype=self.action_dtype,)
+            ))
+            action_space = spaces.Tuple(tuple(single_symbol_action_space for _ in range(len(self.trading_symbols))))
+
+            # action_space = spaces.Tuple((
+            #     spaces.Discrete(2),
+            #     spaces.Discrete(2),
+            #     spaces.Box(
+            #             low=-1e2, high=1e2, dtype=self.action_dtype,
+            #             shape=(len(self.trading_symbols) * (self.symbol_max_orders),)
+            #             ),
+            #     )
+            # )
 
         return action_space
 
@@ -210,11 +222,11 @@ class MtEnv(gym.Env):
                 # symbol, order_i -> [entry_price, volume, profit] or [volume, profit] based on orders_observation_detail_count
             })
         elif self.observation_mode == 1:
-            observation_shape = (
-            self.window_size, self.signal_features.shape[1] + self.flattened_balance_equity_margin_orders_shape[1])
+            observation_shape = (self.window_size, self.signal_features.shape[1] + self.flattened_balance_equity_margin_orders_shape[1])
             observation_space = spaces.Box(low=-INF, high=INF, shape=observation_shape, dtype=self.observation_dtype)
 
         return observation_space
+
 
     def _get_info(self):
         orders = np.zeros(self.orders_shape)
@@ -226,14 +238,15 @@ class MtEnv(gym.Env):
         balance, equity, margin, free_margin = self._get_balance_equity_margin()
 
         return dict(
-            balance=np.array([balance]),
-            equity=np.array([equity]),
-            margin=np.array([margin]),
-            free_margin=np.array([free_margin]),
-            orders=orders,
+            balance = np.array([balance]),
+            equity = np.array([equity]),
+            margin = np.array([margin]),
+            free_margin = np.array([free_margin]),
+            orders = orders,
         )
 
-    def reset(self, seed=None) -> Dict[str, np.ndarray]:
+
+    def reset(self, seed=None, **kwargs) -> Dict[str, np.ndarray]:
         super().reset(seed=seed)
         self._done = False
         self._current_tick = self._start_tick
@@ -250,6 +263,7 @@ class MtEnv(gym.Env):
             self.render()
 
         return observation, info
+
 
     def step(self, action: np.ndarray) -> Tuple[Dict[str, np.ndarray], float, bool, Dict[str, Any]]:
         orders_info, closed_orders_info = self._apply_action(action)
@@ -274,27 +288,32 @@ class MtEnv(gym.Env):
         if self.render_mode == "human":
             self.render()
 
-        if self.observation_mode == 1:
+        if self.observation_mode==1:
             self.update_orders_balance_equity_margin_array()
 
         # print(f"step_reward: {step_reward}")
 
         return observation, step_reward, self._done, False, info
 
+
     def order_trailing_sl_updater(self, order):
         current_close = self.simulator.price_at(order.symbol, self.simulator.current_time)["Close"]
+        previous_sl = order.sl
 
         if order.type == OrderType.Buy:
             if order.sl_tp_type == "pip":
                 order.sl = min(order.sl, order.initial_sl + order.entry_price - current_close)
             elif order.sl_tp_type == "percent":
-                order.sl = min(order.sl, 1 - ((current_close * (1 - order.sl)) / order.entry_price))
+                order.sl = min(order.sl, 1 - ((current_close * (1 - order.sl))/order.entry_price))
 
         elif order.type == OrderType.Sell:
             if order.sl_tp_type == "pip":
                 order.sl = min(order.sl, order.initial_sl - order.entry_price + current_close)
             elif order.sl_tp_type == "percent":
-                order.sl = min(order.sl, ((current_close * (1 + order.sl)) / order.entry_price) - 1)
+                order.sl = min(order.sl, ((current_close * (1 + order.sl))/order.entry_price) - 1 )
+        if self.sl_tp_log:
+            print(f"Previous SL: {previous_sl}, New SL: {order.sl}, Current Close: {current_close}")
+
 
     def orders_sl_update(self):
         if self.trailing_distance is not None:
@@ -302,6 +321,7 @@ class MtEnv(gym.Env):
                 orders = self.simulator.symbol_orders(symbol)
                 for order in orders:
                     self.order_trailing_sl_updater(order)
+
 
     def _apply_action(self, action: np.ndarray) -> Tuple[Dict, Dict]:
         orders_info = {}
@@ -311,7 +331,7 @@ class MtEnv(gym.Env):
 
         for i, symbol in enumerate(self.trading_symbols):
             if self.action_mode == 0:
-                symbol_action = action[k * i:k * (i + 1)]
+                symbol_action = action[k*i:k*(i+1)]
                 close_orders_logit = symbol_action[:-2]
                 hold_logit = symbol_action[-2]
                 volume = symbol_action[-1]
@@ -319,6 +339,7 @@ class MtEnv(gym.Env):
                 close_orders_probability = expit(close_orders_logit)
                 hold_probability = expit(hold_logit)
                 hold = bool(hold_probability > self.hold_threshold)
+                # print(hold_logit, hold_probability, hold)
                 # print(self.hold_threshold, self.close_threshold, hold, hold_probability, close_orders_probability)
 
             elif self.action_mode == 1:
@@ -331,6 +352,14 @@ class MtEnv(gym.Env):
                 close_orders_probability = np.array([])
                 volume = self._get_volume_for_discrete_action(symbol, action_fuzzy_value)
                 # print(action, action_fuzzy_value, volume)
+
+            elif self.action_mode == 2:
+                symbol_action = action[i]
+                close_orders_probability = symbol_action[0]
+                hold = bool(symbol_action[1])
+                volume = symbol_action[2][0]
+                hold_probability = 100.0 if hold else 0.0
+                # print(close_orders_probability, hold, volume)
 
             modified_volume = self._get_modified_volume(symbol, volume)
             symbol_orders = self.simulator.symbol_orders(symbol)
@@ -345,6 +374,8 @@ class MtEnv(gym.Env):
             # print(f"hold_logit:{hold_logit}, hold_probability:{hold_probability}, close_orders_logit:{close_orders_logit}, close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}")
             # print(f"close_orders_probability:{close_orders_probability}, orders_to_close:{orders_to_close}, volume:{volume}, modified_volume:{modified_volume}")
 
+
+
             for j, order in enumerate(orders_to_close):
                 self.simulator.close_order(order)
                 closed_orders_info[symbol].append(dict(
@@ -352,8 +383,7 @@ class MtEnv(gym.Env):
                     volume=order.volume, fee=order.fee,
                     margin=order.margin, profit=order.profit,
                     close_probability=close_orders_probability[orders_to_close_index][j],
-                    fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
-                    trailing_distance=order.trailing_distance,
+                    fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type, trailing_distance=order.trailing_distance,
                 ))
                 # print(f"equity: {self.simulator.equity}, margin:{self.simulator.margin}, balance:{self.simulator.balance}")
 
@@ -365,8 +395,7 @@ class MtEnv(gym.Env):
                             order_id=order.id, symbol=order.symbol, order_type=order.type,
                             volume=order.volume, fee=order.fee,
                             margin=order.margin, profit=order.profit,
-                            fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type,
-                            trailing_distance=order.trailing_distance,
+                            fee_type=order.fee_type, sl=order.sl, tp=order.tp, sl_tp_type=order.sl_tp_type, trailing_distance=order.trailing_distance,
                         ))
 
             orders_capacity = self.symbol_max_orders - (len(self.simulator.symbol_orders(symbol)))
@@ -376,8 +405,7 @@ class MtEnv(gym.Env):
                 order_id=None, symbol=symbol, hold_probability=hold_probability,
                 hold=hold, volume=volume, capacity=orders_capacity, order_type=None,
                 modified_volume=modified_volume, fee=float('nan'), margin=float('nan'),
-                fee_type=self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type,
-                trailing_distance=self.trailing_distance,
+                fee_type=self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type, trailing_distance=self.trailing_distance,
                 error='',
             )
 
@@ -392,9 +420,7 @@ class MtEnv(gym.Env):
                 # print(f"equity: {self.simulator.equity}, margin:{self.simulator.margin}, balance:{self.simulator.balance}")
 
                 try:
-                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type,
-                                                        sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type,
-                                                        trailing_distance=self.trailing_distance)
+                    order = self.simulator.create_order(order_type, symbol, modified_volume, fee, self.fee_type, sl=self.sl, tp=self.tp, sl_tp_type=self.sl_tp_type, trailing_distance=self.trailing_distance)
                     new_info = dict(
                         order_id=order.id, order_type=order_type,
                         fee=fee, margin=order.margin,
@@ -409,35 +435,37 @@ class MtEnv(gym.Env):
 
                 # print(f"symbol_orders:{self.simulator.symbol_orders(symbol)} ,hold:{hold}, new_info:{new_info}")
             # print("---------------------------------------")
-            # print()
+                # print()
         return orders_info, closed_orders_info
+
 
     def order_sl_or_tp_creator(self, order, low_or_high):
         if order.type == OrderType.Buy:
-            if low_or_high == "Low":
+            if low_or_high=="Low":
                 sl_or_tp = order.sl
-            elif low_or_high == "High":
+            elif low_or_high=="High":
                 sl_or_tp = order.tp
         elif order.type == OrderType.Sell:
-            if low_or_high == "Low":
+            if low_or_high=="Low":
                 sl_or_tp = order.tp
-            elif low_or_high == "High":
+            elif low_or_high=="High":
                 sl_or_tp = order.sl
 
         return sl_or_tp
+
 
     def sl_tp_conditions_creator(self, order, low_or_high):
         sl_or_tp = self.order_sl_or_tp_creator(order, low_or_high)
 
         if order.sl_tp_type == "pip":
-            if low_or_high == "Low":
+            if low_or_high=="Low":
                 return order.entry_price - sl_or_tp, sl_or_tp
-            elif low_or_high == "High":
+            elif low_or_high=="High":
                 return order.entry_price + sl_or_tp, sl_or_tp
         elif order.sl_tp_type == "percent":
-            if low_or_high == "Low":
+            if low_or_high=="Low":
                 return order.entry_price * (1 - sl_or_tp), sl_or_tp
-            elif low_or_high == "High":
+            elif low_or_high=="High":
                 return order.entry_price * (1 + sl_or_tp), sl_or_tp
 
     @staticmethod
@@ -447,19 +475,20 @@ class MtEnv(gym.Env):
         else:
             return False
 
+
     def check_sl_tp_condition(self, order, log=False):
         current_ohlc = self.simulator.price_at(order.symbol, self.simulator.current_time)
         close_order = False
-        sl_or_tp_low = self.order_sl_or_tp_creator(order, low_or_high="Low")
+        sl_or_tp_low  = self.order_sl_or_tp_creator(order, low_or_high="Low")
         sl_or_tp_high = self.order_sl_or_tp_creator(order, low_or_high="High")
+
 
         if order.type == OrderType.Buy:
             if self.check_is_not_none(sl_or_tp_low):
                 thresh, sl = self.sl_tp_conditions_creator(order, "Low")
                 if current_ohlc["Low"] <= thresh:
                     if log:
-                        print(
-                            f"Buy SL Hit, SL: {sl}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, Low: {current_ohlc['Low']}")
+                        print(f"Buy SL Hit, SL: {sl}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, Low: {current_ohlc['Low']}")
                     close_order = True
                     close_price = thresh
 
@@ -467,18 +496,16 @@ class MtEnv(gym.Env):
                 thresh, tp = self.sl_tp_conditions_creator(order, "High")
                 if current_ohlc["High"] >= thresh:
                     if log:
-                        print(
-                            f"Buy TP Hit, TP: {tp}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, High: {current_ohlc['High']}")
+                        print(f"Buy TP Hit, TP: {tp}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, High: {current_ohlc['High']}")
                     close_order = True
                     close_price = thresh
 
-        if order.type == OrderType.Sell:
+        elif order.type == OrderType.Sell:
             if self.check_is_not_none(sl_or_tp_high):
                 thresh, sl = self.sl_tp_conditions_creator(order, "High")
                 if current_ohlc["High"] >= thresh:
                     if log:
-                        print(
-                            f"Sell SL Hit, SL: {sl}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, High: {current_ohlc['High']}")
+                        print(f"Sell SL Hit, SL: {sl}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, High: {current_ohlc['High']}")
                     close_order = True
                     close_price = thresh
 
@@ -486,8 +513,7 @@ class MtEnv(gym.Env):
                 thresh, tp = self.sl_tp_conditions_creator(order, "Low")
                 if current_ohlc["Low"] <= thresh:
                     if log:
-                        print(
-                            f"Sell TP Hit, TP: {tp}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, Low: {current_ohlc['Low']}")
+                        print(f"Sell TP Hit, TP: {tp}, Threshold: {thresh} ,Entry: {order.entry_price}, Close: {current_ohlc['Close']}, Low: {current_ohlc['Low']}")
                     close_order = True
                     close_price = thresh
 
@@ -497,7 +523,9 @@ class MtEnv(gym.Env):
         else:
             return False
 
-    def _get_prices(self, keys: List[str] = ['Close', 'Open']) -> Dict[str, np.ndarray]:
+
+
+    def _get_prices(self, keys: List[str]=['Close', 'Open']) -> Dict[str, np.ndarray]:
         prices = {}
 
         for symbol in self.trading_symbols:
@@ -513,13 +541,13 @@ class MtEnv(gym.Env):
 
         return prices
 
+
     def _process_data(self) -> np.ndarray:
         # data = self.prices
 
         data = {}
         for symbol in self.trading_symbols:
-            data[symbol] = np.array(
-                self.original_simulator.symbols_data[symbol].iloc[:, self.ohlc_count_in_symbols_data:])
+            data[symbol] = np.array(self.original_simulator.symbols_data[symbol].iloc[:, self.ohlc_count_in_symbols_data:])
 
         signal_features = np.column_stack(list(data.values()))
         return signal_features.astype(np.float32)
@@ -572,6 +600,7 @@ class MtEnv(gym.Env):
         new_row = self._get_orders_balance_equity_margin_one_step_flattened()
         self.orders_balance_equity_margin_array = self.add_row_shift_down(new_row)
 
+
     def _get_balance_equity_margin(self):
         balance = self.simulator.balance
         equity = self.simulator.equity
@@ -586,9 +615,9 @@ class MtEnv(gym.Env):
         return balance, equity, margin, free_margin
 
     def _get_observation(self):
-        features = self.signal_features[(self._current_tick - self.window_size + 1):(self._current_tick + 1)]
+        features = self.signal_features[(self._current_tick-self.window_size+1):(self._current_tick+1)]
 
-        if self.observation_mode == 0:
+        if self.observation_mode==0:
             balance, equity, margin, free_margin = self._get_balance_equity_margin()
             orders = self._get_orders()
 
@@ -601,17 +630,19 @@ class MtEnv(gym.Env):
                 'orders': orders,
             }
 
-        elif self.observation_mode == 1:
+        elif self.observation_mode==1:
             # print(self.orders_balance_equity_margin_array.shape, features.shape)
             observation = np.concatenate((features, self.orders_balance_equity_margin_array), axis=1)
 
         return observation
+
 
     def _calculate_reward(self) -> float:
         prev_equity = self.history[-1]['equity']
         current_equity = self.simulator.equity
         step_reward = current_equity - prev_equity
         return step_reward
+
 
     def _create_info(self, **kwargs: Any) -> Dict[str, Any]:
         info = {k: v for k, v in kwargs.items()}
@@ -622,6 +653,7 @@ class MtEnv(gym.Env):
         info['margin_level'] = self.simulator.margin_level
         return info
 
+
     def _get_modified_volume(self, symbol: str, volume: float) -> float:
         si = self.simulator.symbols_info[symbol]
         v = abs(volume)
@@ -629,15 +661,17 @@ class MtEnv(gym.Env):
         v = round(v / si.volume_step) * si.volume_step
         return v
 
-    def render(self, mode: str = 'human', **kwargs: Any) -> Any:
+
+    def render(self, mode: str='human', **kwargs: Any) -> Any:
         if mode == 'simple_figure':
             return self._render_simple_figure(**kwargs)
         if mode == 'advanced_figure':
             return self._render_advanced_figure(**kwargs)
         return self.simulator.get_state(**kwargs)
 
+
     def _render_simple_figure(
-            self, figsize: Tuple[float, float] = (14, 6), return_figure: bool = False
+        self, figsize: Tuple[float, float]=(14, 6), return_figure: bool=False
     ) -> Any:
         fig, ax = plt.subplots(figsize=figsize, facecolor='white')
 
@@ -703,10 +737,11 @@ class MtEnv(gym.Env):
 
         plt.show()
 
+
     def _render_advanced_figure(
-            self, figsize: Tuple[float, float] = (1400, 600), time_format: str = "%Y-%m-%d %H:%m",
-            return_figure: bool = False
-    ) -> Any:
+            self, figsize: Tuple[float, float]=(1400, 600), time_format: str="%Y-%m-%d %H:%m",
+            return_figure: bool=False
+        ) -> Any:
 
         fig = go.Figure()
 
@@ -738,13 +773,13 @@ class MtEnv(gym.Env):
                     opacity=1.0,
                     hovertext=extra_info,
                     name=symbol,
-                    yaxis=f'y{j + 1}',
-                    legendgroup=f'g{j + 1}',
+                    yaxis=f'y{j+1}',
+                    legendgroup=f'g{j+1}',
                 ),
             )
 
             fig.update_layout(**{
-                f'yaxis{j + 1}': dict(
+                f'yaxis{j+1}': dict(
                     tickfont=dict(color=get_color_string(symbol_color * [1, 1, 1, 0.8])),
                     overlaying='y' if j > 0 else None,
                     # position=0.035*j
@@ -822,9 +857,9 @@ class MtEnv(gym.Env):
                     marker_color=trade_colors,
                     marker_size=trade_sizes,
                     name=symbol,
-                    yaxis=f'y{j + 1}',
+                    yaxis=f'y{j+1}',
                     showlegend=False,
-                    legendgroup=f'g{j + 1}',
+                    legendgroup=f'g{j+1}',
                 ),
             )
 
@@ -839,9 +874,9 @@ class MtEnv(gym.Env):
                     marker_size=7,
                     marker_line_width=1.5,
                     name=symbol,
-                    yaxis=f'y{j + 1}',
+                    yaxis=f'y{j+1}',
                     showlegend=False,
-                    legendgroup=f'g{j + 1}',
+                    legendgroup=f'g{j+1}',
                 ),
             )
 
@@ -864,8 +899,10 @@ class MtEnv(gym.Env):
 
         fig.show()
 
+
     def close(self) -> None:
         plt.close()
+
 
     def orders_extractor_from_history(self, change_index=False, sort=True):
         state = self.render()
@@ -875,7 +912,7 @@ class MtEnv(gym.Env):
         orders['Entry Value'] = ((orders['Entry Price'] * orders['Volume']))
         orders['Return'] = orders['Profit'] / ((orders['Entry Price'] * orders['Volume']))
         orders['Duration'] = orders['Exit Time'] - orders['Entry Time']
-        orders["Paid Fee"] = orders["Gross Profit"] - orders["Profit"]
+        orders["Paid Fee"]  = orders["Gross Profit"] - orders["Profit"]
 
         if change_index:
             column = 'Entry Time' if entry else 'Exit Time'
